@@ -8,11 +8,13 @@ import static java.lang.System.currentTimeMillis;
 import java.io.IOException;
 import java.net.URI;
 import java.security.MessageDigest;
+import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 
 import javax.websocket.ClientEndpointConfig;
+import javax.websocket.CloseReason;
 import javax.websocket.Endpoint;
 import javax.websocket.EndpointConfig;
 import javax.websocket.MessageHandler;
@@ -46,7 +48,9 @@ public class Rocky extends Thread {
 
 	long lastPing = Long.MAX_VALUE;
 	
+	boolean stopped = false;
 	private boolean doRun() {
+		lastPing = Long.MAX_VALUE;
 		try {
 			final ClientEndpointConfig cec = ClientEndpointConfig.Builder.create().build();
 			ClientManager client = ClientManager.createClient();
@@ -54,6 +58,7 @@ public class Rocky extends Thread {
 
 				@Override
 				public void onOpen(final Session session, EndpointConfig config) {
+					log("Session "+ session.getId() + " opened");
 					try {
 						session.addMessageHandler(new MessageHandler.Whole<String>() {
 
@@ -64,7 +69,9 @@ public class Rocky extends Thread {
 									lastPing = currentTimeMillis();
 								}
 								else if(message.contains(stopMessage)) {
-									stop();
+									logout();
+									log("received stop message");
+									stopped = true;
 								} else {
 									for (Consumer<String> consumer : handlers) {
 										consumer.accept(message);
@@ -91,34 +98,53 @@ public class Rocky extends Thread {
 						e.printStackTrace();
 					}
 				}
+				@Override
+				public void onClose(Session session, CloseReason closeReason) {
+					log("Closed");
+					super.onClose(session, closeReason);
+				}
+				
+				@Override
+				public void onError(Session session, Throwable thr) {
+					System.err.println("Error");
+					thr.printStackTrace();
+					super.onError(session, thr);
+				}
 			}, cec, new URI(url));
 			while (currentTimeMillis()-lastPing < 1000 * 60 * 1) {
 				try {
+					if(stopped) return !stopped;
 					Thread.sleep(1000*5);
 				} catch (InterruptedException e1) {
-					System.out.println(e1.getLocalizedMessage());
+					log(e1.getLocalizedMessage());
 				}
 			}
 			System.err.println("No ping received -> restarting");
-//			logout();
+			logout();
 		} catch (Exception e) {
 			e.printStackTrace();
 			try {
-				System.out.println("Waiting 60 seconds");
-				Thread.sleep(1000*60);
+				int secs = 60;
+				log("Waiting "+secs+" seconds");
+				Thread.sleep(1000*secs);
 			} catch (InterruptedException e1) {
 				e1.printStackTrace();
 			}
 		}
-		return true;
+		return !stopped;
 	}
 
 	private void logout() {
-		System.out.println("Closing session");
+		log("Closing session");
 		try {
 			session.close();
 		} catch (IOException e) {
 		}
+	}
+
+
+	private void log(String s) {
+		 System.out.println(new Timestamp(currentTimeMillis())+ " : "+s);
 	}
 
 
