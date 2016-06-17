@@ -24,7 +24,10 @@ import org.glassfish.tyrus.client.ClientManager;
 
 public class Rocky extends Thread {
 	
-
+	enum State {
+		RUNNING , STOPPED, RESTART_REQUIRED
+	}
+	
 	final String user;
 	final String password;
 	final String url;
@@ -48,9 +51,14 @@ public class Rocky extends Thread {
 
 	long lastPing = Long.MAX_VALUE;
 	
-	boolean stopped = false;
+	State state = State.RUNNING;
+	public void close() {
+		state = State.STOPPED;
+	}
+	
 	private boolean doRun() {
 		lastPing = Long.MAX_VALUE;
+		state = State.RUNNING;
 		try {
 			final ClientEndpointConfig cec = ClientEndpointConfig.Builder.create().build();
 			ClientManager client = ClientManager.createClient();
@@ -61,7 +69,7 @@ public class Rocky extends Thread {
 					log("Session "+ session.getId() + " opened");
 					try {
 						session.addMessageHandler(new MessageHandler.Whole<String>() {
-
+							
 							@Override
 							public void onMessage(String message) {
 								if("a[\"{\\\"msg\\\":\\\"ping\\\"}\"]".equals(message)) {
@@ -71,7 +79,7 @@ public class Rocky extends Thread {
 								else if(message.contains(stopMessage)) {
 									logout();
 									log("received stop message");
-									stopped = true;
+									state = State.STOPPED;
 								} else {
 									for (Consumer<String> consumer : handlers) {
 										consumer.accept(message);
@@ -101,6 +109,7 @@ public class Rocky extends Thread {
 				@Override
 				public void onClose(Session session, CloseReason closeReason) {
 					log("Closed");
+					if(State.RUNNING.equals(state)) state = State.RESTART_REQUIRED;
 					super.onClose(session, closeReason);
 				}
 				
@@ -111,15 +120,14 @@ public class Rocky extends Thread {
 					super.onError(session, thr);
 				}
 			}, cec, new URI(url));
-			while (currentTimeMillis()-lastPing < 1000 * 60 * 1) {
+			while (currentTimeMillis()-lastPing < 1000 * 60 * 1 && State.RUNNING.equals(state)) {
 				try {
-					if(stopped) return !stopped;
 					Thread.sleep(1000*5);
 				} catch (InterruptedException e1) {
 					log(e1.getLocalizedMessage());
 				}
 			}
-			System.err.println("No ping received -> restarting");
+			if(State.RUNNING.equals(state)) System.err.println("No ping received -> restarting");
 			logout();
 		} catch (Exception e) {
 			e.printStackTrace();
@@ -131,10 +139,11 @@ public class Rocky extends Thread {
 				e1.printStackTrace();
 			}
 		}
-		return !stopped;
+		return !State.STOPPED.equals(state);
 	}
 
 	private void logout() {
+		if(!session.isOpen()) return;
 		log("Closing session");
 		try {
 			session.close();
